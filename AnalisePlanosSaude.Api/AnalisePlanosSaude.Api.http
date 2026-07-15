@@ -1,0 +1,6 @@
+@AnalisePlanosSaude.Api_HostAddress = http://localhost:5032
+
+GET {{AnalisePlanosSaude.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
