@@ -52,6 +52,7 @@ builder.Services.AddHttpClient("OpenRouter");
 builder.Services.AddScoped<ISimuladorCollector, SimuladorCollector>();
 builder.Services.AddScoped<IOpenRouterService, OpenRouterService>();
 builder.Services.AddScoped<IAnaliseService, AnaliseService>();
+builder.Services.AddScoped<IAnaliseComercialService, AnaliseComercialService>();
 builder.Services.AddScoped<ISimulacaoColetaService, SimulacaoColetaService>();
 builder.Services.AddScoped<IAnaliseSimulacaoService, AnaliseSimulacaoService>();
 builder.Services.AddScoped<ISimulacaoHistoricoService, SimulacaoHistoricoService>();
