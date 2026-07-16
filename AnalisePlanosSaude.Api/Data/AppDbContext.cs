@@ -7,6 +7,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 {
     public DbSet<Analise> Analises => Set<Analise>();
     public DbSet<AnaliseLink> AnaliseLinks => Set<AnaliseLink>();
+    public DbSet<AnaliseComercial> AnalisesComerciais => Set<AnaliseComercial>();
     public DbSet<SimulacaoColeta> SimulacoesColetas => Set<SimulacaoColeta>();
     public DbSet<SimulacaoPlano> SimulacoesPlanos => Set<SimulacaoPlano>();
     public DbSet<SimulacaoValorFaixa> SimulacoesValoresFaixa => Set<SimulacaoValorFaixa>();
@@ -53,6 +54,33 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(x => x.Erro).HasColumnType("longtext");
             entity.Property(x => x.CriadoEm).IsRequired();
             entity.HasIndex(x => x.AnaliseId);
+        });
+
+        modelBuilder.Entity<AnaliseComercial>(entity =>
+        {
+            entity.ToTable("AnalisesComerciais");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.IdadesJson).HasColumnType("json").IsRequired();
+            entity.Property(x => x.NecessidadesJson).HasColumnType("json").IsRequired();
+            entity.Property(x => x.Cep).HasMaxLength(8);
+            entity.Property(x => x.LinkSimulacao).HasMaxLength(2048);
+            entity.Property(x => x.HashSimulacao).HasMaxLength(120);
+            entity.Property(x => x.FiltrosJson).HasColumnType("json").IsRequired();
+            entity.Property(x => x.PerfilCliente).HasColumnType("text");
+            entity.Property(x => x.PrioridadeVenda).HasMaxLength(80);
+            entity.Property(x => x.ObservacoesCorretor).HasColumnType("text");
+            entity.Property(x => x.Status).HasMaxLength(40).IsRequired();
+            entity.Property(x => x.DatasetJson).HasColumnType("longtext");
+            entity.Property(x => x.ResultadoJson).HasColumnType("longtext");
+            entity.Property(x => x.MelhorPlanoCliente).HasMaxLength(300);
+            entity.Property(x => x.MelhorPlanoCorretor).HasMaxLength(300);
+            entity.Property(x => x.MensagemCaptacao).HasColumnType("longtext");
+            entity.Property(x => x.MensagemApresentacao).HasColumnType("longtext");
+            entity.Property(x => x.MensagemFechamento).HasColumnType("longtext");
+            entity.Property(x => x.Erro).HasColumnType("longtext");
+            entity.Property(x => x.CriadoEm).IsRequired();
+            entity.HasIndex(x => x.HashSimulacao);
+            entity.HasIndex(x => x.CriadoEm);
         });
 
         modelBuilder.Entity<SimulacaoColeta>(entity =>
