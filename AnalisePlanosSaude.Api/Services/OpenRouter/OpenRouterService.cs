@@ -1,7 +1,9 @@
 using System.Net.Http.Headers;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AnalisePlanosSaude.Api.Entities;
 using AnalisePlanosSaude.Api.Models.Responses;
 using AnalisePlanosSaude.Api.Options;
 using AnalisePlanosSaude.Api.Services.Analise;
@@ -12,7 +14,11 @@ using Microsoft.Extensions.Options;
 
 namespace AnalisePlanosSaude.Api.Services.OpenRouter;
 
-public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOptions<OpenRouterOptions> options) : IOpenRouterService
+public sealed class OpenRouterService(
+    IHttpClientFactory httpClientFactory,
+    IOptions<OpenRouterOptions> options,
+    IOpenRouterModelSelector modelSelector,
+    IOpenRouterModelosService modelosService) : IOpenRouterService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -57,7 +63,7 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
             contrato = "Cada item de planos deve seguir o contrato PlanoNormalizado: urlOrigem, operadora, plano, registroAns, valorTotal, valoresPorIdade, tipoContratacao, acomodacao, abrangencia, segmentacao, reembolso, elegibilidade, carencia, coparticipacao, coparticipacaoTerapias, documentacaoNecessaria, areaComercializacao, odontologia, hospitais, clinicas, laboratorios, centrosDiagnostico, prontosSocorros, observacoes, evidencias, camposNaoEncontrados."
         };
 
-        var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+        var json = await ChatAsync(OpenRouterTipoTarefa.NormalizacaoColeta, prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
         var wrapper = DeserializeOrThrow<PlanosWrapper>(json);
         return wrapper.Planos ?? [];
     }
@@ -103,7 +109,7 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
             planos
         };
 
-        var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+        var json = await ChatAsync(OpenRouterTipoTarefa.AnalisePlanos, prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
         return DeserializeOrThrow<ResultadoAnaliseResponse>(json);
     }
 
@@ -146,7 +152,7 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
             alertas = resultadoBase.Alertas
         };
 
-        var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+        var json = await ChatAsync(OpenRouterTipoTarefa.AnaliseSimulacao, prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
         return DeserializeOrThrow<AnaliseSimulacaoIaTextos>(json);
     }
 
@@ -210,51 +216,98 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
             }
         };
 
-        var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+        var json = await ChatAsync(OpenRouterTipoTarefa.AnaliseComercial, prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
         return DeserializeOrThrow<AnaliseComercialIaTextos>(json);
     }
 
-    private async Task<string> ChatAsync(string systemPrompt, string userPayload, CancellationToken cancellationToken)
+    private async Task<string> ChatAsync(OpenRouterTipoTarefa tipoTarefa, string systemPrompt, string userPayload, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_options.ApiKey) || string.IsNullOrWhiteSpace(_options.Model))
+        if (string.IsNullOrWhiteSpace(_options.ApiKey))
         {
-            throw new ValidacaoException("FALHA_OPENROUTER", "OpenRouter__ApiKey e OpenRouter__Model devem estar configurados.");
+            throw new ValidacaoException("FALHA_OPENROUTER", "OpenRouter__ApiKey deve estar configurado.");
         }
 
+        var model = await modelSelector.SelecionarAsync(tipoTarefa, cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, _options.TimeoutSeconds)));
+        var stopwatch = Stopwatch.StartNew();
+        string? erro = null;
+        int? tokensInput = null;
+        int? tokensOutput = null;
 
-        var client = httpClientFactory.CreateClient("OpenRouter");
-        client.Timeout = Timeout.InfiniteTimeSpan;
-        client.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
-        client.DefaultRequestHeaders.Remove("HTTP-Referer");
-        client.DefaultRequestHeaders.Remove("X-Title");
-        client.DefaultRequestHeaders.Add("HTTP-Referer", _options.SiteUrl);
-        client.DefaultRequestHeaders.Add("X-Title", _options.AppName);
-
-        var request = new
+        try
         {
-            model = _options.Model,
-            temperature = 0.1,
-            response_format = new { type = "json_object" },
-            messages = new object[]
+            var client = httpClientFactory.CreateClient("OpenRouter");
+            client.Timeout = Timeout.InfiniteTimeSpan;
+            client.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+            client.DefaultRequestHeaders.Remove("HTTP-Referer");
+            client.DefaultRequestHeaders.Remove("X-Title");
+            client.DefaultRequestHeaders.Add("HTTP-Referer", _options.SiteUrl);
+            client.DefaultRequestHeaders.Add("X-Title", _options.AppName);
+
+            var request = new
             {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userPayload }
+                model,
+                temperature = 0.1,
+                response_format = new { type = "json_object" },
+                messages = new object[]
+                {
+                    new { role = "system", content = systemPrompt },
+                    new { role = "user", content = userPayload }
+                }
+            };
+
+            using var response = await client.PostAsync("chat/completions", new StringContent(JsonSerializer.Serialize(request, JsonOptions), Encoding.UTF8, "application/json"), timeout.Token);
+            var content = await response.Content.ReadAsStringAsync(timeout.Token);
+            if (!response.IsSuccessStatusCode)
+            {
+                erro = content;
+                throw new ValidacaoException("FALHA_OPENROUTER", "Falha ao chamar OpenRouter.", [content]);
             }
-        };
 
-        using var response = await client.PostAsync("chat/completions", new StringContent(JsonSerializer.Serialize(request, JsonOptions), Encoding.UTF8, "application/json"), timeout.Token);
-        var content = await response.Content.ReadAsStringAsync(timeout.Token);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new ValidacaoException("FALHA_OPENROUTER", "Falha ao chamar OpenRouter.", [content]);
+            using var doc = JsonDocument.Parse(content);
+            if (doc.RootElement.TryGetProperty("usage", out var usage))
+            {
+                tokensInput = GetInt(usage, "prompt_tokens");
+                tokensOutput = GetInt(usage, "completion_tokens");
+            }
+
+            var message = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+            var result = ExtractJson(message);
+            stopwatch.Stop();
+            await RegistrarExecucaoAsync(tipoTarefa, model, tokensInput, tokensOutput, stopwatch.ElapsedMilliseconds, true, null, cancellationToken);
+            return result;
         }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            await RegistrarExecucaoAsync(tipoTarefa, model, tokensInput, tokensOutput, stopwatch.ElapsedMilliseconds, false, erro ?? ex.Message, CancellationToken.None);
+            throw;
+        }
+    }
 
-        using var doc = JsonDocument.Parse(content);
-        var message = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
-        return ExtractJson(message);
+    private async Task RegistrarExecucaoAsync(OpenRouterTipoTarefa tipoTarefa, string model, int? tokensInput, int? tokensOutput, long tempoMs, bool sucesso, string? erro, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await modelosService.RegistrarExecucaoAsync(new OpenRouterExecucao
+            {
+                TipoTarefa = tipoTarefa,
+                ModelId = model,
+                TokensInput = tokensInput,
+                TokensOutput = tokensOutput,
+                TempoMs = tempoMs,
+                Sucesso = sucesso,
+                Erro = erro,
+                CustoEstimado = null,
+                CriadoEm = DateTime.UtcNow
+            }, cancellationToken);
+        }
+        catch
+        {
+            // Falha de telemetria nao deve invalidar a analise do corretor.
+        }
     }
 
     private static T DeserializeOrThrow<T>(string json)
@@ -290,6 +343,13 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
 
         JsonDocument.Parse(cleaned);
         return cleaned;
+    }
+
+    private static int? GetInt(JsonElement element, string propertyName)
+    {
+        return element.ValueKind == JsonValueKind.Object && element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var result)
+            ? result
+            : null;
     }
 
     private sealed record PlanosWrapper(IReadOnlyList<PlanoNormalizado>? Planos);

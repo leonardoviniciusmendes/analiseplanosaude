@@ -15,6 +15,7 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<OpenRouterOptions>(builder.Configuration.GetSection("OpenRouter"));
+builder.Services.Configure<OpenRouterModelosOptions>(builder.Configuration.GetSection("OpenRouterModelos"));
 builder.Services.Configure<PlaywrightOptions>(builder.Configuration.GetSection("Playwright"));
 builder.Services.Configure<AtualizacaoSimulacoesOptions>(builder.Configuration.GetSection("AtualizacaoSimulacoes"));
 
@@ -51,6 +52,8 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddHttpClient("OpenRouter");
 builder.Services.AddScoped<ISimuladorCollector, SimuladorCollector>();
 builder.Services.AddScoped<IOpenRouterService, OpenRouterService>();
+builder.Services.AddScoped<IOpenRouterModelosService, OpenRouterModelosService>();
+builder.Services.AddScoped<IOpenRouterModelSelector, OpenRouterModelSelector>();
 builder.Services.AddScoped<IAnaliseService, AnaliseService>();
 builder.Services.AddScoped<IAnaliseComercialService, AnaliseComercialService>();
 builder.Services.AddScoped<ISimulacaoColetaService, SimulacaoColetaService>();
@@ -60,6 +63,7 @@ builder.Services.AddScoped<ISimulacaoAtualizacaoService, SimulacaoAtualizacaoSer
 builder.Services.AddHostedService<SimulacaoColetaJobWorker>();
 builder.Services.AddHostedService<SimulacaoAtualizacaoDiariaWorker>();
 builder.Services.AddHostedService<AnaliseComercialWorker>();
+builder.Services.AddHostedService<OpenRouterModelosWorker>();
 
 var app = builder.Build();
 

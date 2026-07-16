@@ -1,0 +1,365 @@
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using AnalisePlanosSaude.Api.Data;
+using AnalisePlanosSaude.Api.Entities;
+using AnalisePlanosSaude.Api.Models.Responses;
+using AnalisePlanosSaude.Api.Options;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+
+namespace AnalisePlanosSaude.Api.Services.OpenRouter;
+
+public sealed class OpenRouterModelosService(
+    AppDbContext db,
+    IHttpClientFactory httpClientFactory,
+    IOptions<OpenRouterOptions> openRouterOptions,
+    IOptions<OpenRouterModelosOptions> modelosOptions) : IOpenRouterModelosService
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private readonly OpenRouterOptions _openRouterOptions = openRouterOptions.Value;
+    private readonly OpenRouterModelosOptions _modelosOptions = modelosOptions.Value;
+
+    public async Task<OpenRouterSincronizacaoModelosResponse> SincronizarAsync(CancellationToken cancellationToken)
+    {
+        var modelos = await BuscarModelosOpenRouterAsync(cancellationToken);
+        var agora = DateTime.UtcNow;
+        var ids = modelos.Select(x => x.ModelId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existentes = await db.OpenRouterModelos.ToDictionaryAsync(x => x.ModelId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        var criados = 0;
+        var atualizados = 0;
+
+        foreach (var item in modelos)
+        {
+            if (!existentes.TryGetValue(item.ModelId, out var modelo))
+            {
+                modelo = new OpenRouterModelo { ModelId = item.ModelId };
+                db.OpenRouterModelos.Add(modelo);
+                criados++;
+            }
+            else
+            {
+                atualizados++;
+            }
+
+            modelo.Nome = item.Nome;
+            modelo.Provider = item.Provider;
+            modelo.ContextLength = item.ContextLength;
+            modelo.PrecoInputPorMilhaoTokens = item.PrecoInputPorMilhaoTokens;
+            modelo.PrecoOutputPorMilhaoTokens = item.PrecoOutputPorMilhaoTokens;
+            modelo.SuportaJsonEstruturado = item.SuportaJsonEstruturado;
+            modelo.SuportaTools = item.SuportaTools;
+            modelo.Ativo = true;
+            modelo.CustoBeneficioScore = CalcularScore(modelo);
+            modelo.UltimaAtualizacao = agora;
+
+            db.OpenRouterModelosHistorico.Add(new OpenRouterModeloHistorico
+            {
+                ModelId = item.ModelId,
+                PrecoInputPorMilhaoTokens = item.PrecoInputPorMilhaoTokens,
+                PrecoOutputPorMilhaoTokens = item.PrecoOutputPorMilhaoTokens,
+                ContextLength = item.ContextLength,
+                Ativo = true,
+                CustoBeneficioScore = modelo.CustoBeneficioScore,
+                DadosJson = item.DadosJson,
+                CriadoEm = agora
+            });
+        }
+
+        foreach (var modelo in existentes.Values.Where(x => !ids.Contains(x.ModelId)))
+        {
+            modelo.Ativo = false;
+            modelo.UltimaAtualizacao = agora;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await RecalcularRecomendacoesAsync(cancellationToken);
+
+        return new OpenRouterSincronizacaoModelosResponse(modelos.Count, criados, atualizados, agora);
+    }
+
+    public async Task<IReadOnlyList<OpenRouterModeloResponse>> ListarAsync(bool somenteAtivos, CancellationToken cancellationToken)
+    {
+        var query = db.OpenRouterModelos.AsNoTracking();
+        if (somenteAtivos)
+        {
+            query = query.Where(x => x.Ativo);
+        }
+
+        return await query
+            .OrderByDescending(x => x.CustoBeneficioScore)
+            .ThenBy(x => x.PrecoInputPorMilhaoTokens ?? decimal.MaxValue)
+            .Select(x => ToResponse(x))
+            .ToArrayAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<OpenRouterModeloRecomendadoResponse>> ListarRecomendadosAsync(CancellationToken cancellationToken)
+    {
+        var modelos = await db.OpenRouterModelos.AsNoTracking().Where(x => x.Ativo).ToArrayAsync(cancellationToken);
+        return
+        [
+            ToRecomendado(OpenRouterTipoTarefa.NormalizacaoColeta, EscolherNormalizacao(modelos), "Melhor equilibrio para extracao estruturada e JSON."),
+            ToRecomendado(OpenRouterTipoTarefa.AnalisePlanos, EscolherAnalise(modelos), "Melhor equilibrio para raciocinio comercial e contexto."),
+            ToRecomendado(OpenRouterTipoTarefa.AnaliseSimulacao, EscolherAnalise(modelos), "Melhor equilibrio para comparar planos salvos."),
+            ToRecomendado(OpenRouterTipoTarefa.AnaliseComercial, EscolherAnalise(modelos), "Melhor equilibrio para analise comercial e roteiro de venda."),
+            ToRecomendado(OpenRouterTipoTarefa.MensagemCliente, EscolherMensagem(modelos), "Modelo de menor custo suficiente para texto curto."),
+            ToRecomendado(OpenRouterTipoTarefa.CorrecaoJson, EscolherNormalizacao(modelos), "Modelo com boa aderencia a JSON para correcao simples.")
+        ];
+    }
+
+    public async Task RegistrarExecucaoAsync(OpenRouterExecucao execucao, CancellationToken cancellationToken)
+    {
+        db.OpenRouterExecucoes.Add(execucao);
+
+        var modelo = await db.OpenRouterModelos.FirstOrDefaultAsync(x => x.ModelId == execucao.ModelId, cancellationToken);
+        if (modelo is not null)
+        {
+            execucao.CustoEstimado = CalcularCusto(execucao, modelo);
+            modelo.TotalExecucoes++;
+            if (execucao.Sucesso)
+            {
+                modelo.TotalSucessos++;
+            }
+            else
+            {
+                modelo.TotalFalhas++;
+            }
+
+            modelo.TempoMedioMs = modelo.TempoMedioMs is null
+                ? execucao.TempoMs
+                : Math.Round((modelo.TempoMedioMs.Value * (modelo.TotalExecucoes - 1) + execucao.TempoMs) / modelo.TotalExecucoes, 2);
+            modelo.CustoBeneficioScore = CalcularScore(modelo);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ModeloOpenRouterDto>> BuscarModelosOpenRouterAsync(CancellationToken cancellationToken)
+    {
+        var client = httpClientFactory.CreateClient("OpenRouter");
+        client.BaseAddress = new Uri(_openRouterOptions.BaseUrl.TrimEnd('/') + "/");
+        client.DefaultRequestHeaders.Remove("Authorization");
+        client.DefaultRequestHeaders.Remove("HTTP-Referer");
+        client.DefaultRequestHeaders.Remove("X-Title");
+
+        if (!string.IsNullOrWhiteSpace(_openRouterOptions.ApiKey))
+        {
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _openRouterOptions.ApiKey);
+        }
+
+        client.DefaultRequestHeaders.Add("HTTP-Referer", _openRouterOptions.SiteUrl);
+        client.DefaultRequestHeaders.Add("X-Title", _openRouterOptions.AppName);
+
+        using var response = await client.GetAsync("models", cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(content);
+        var data = doc.RootElement.TryGetProperty("data", out var dataElement) && dataElement.ValueKind == JsonValueKind.Array
+            ? dataElement
+            : doc.RootElement;
+
+        var modelos = new List<ModeloOpenRouterDto>();
+        foreach (var item in data.EnumerateArray())
+        {
+            var modelId = GetString(item, "id");
+            if (string.IsNullOrWhiteSpace(modelId))
+            {
+                continue;
+            }
+
+            var pricing = item.TryGetProperty("pricing", out var pricingElement) ? pricingElement : default;
+            var supportedParameters = item.TryGetProperty("supported_parameters", out var parametersElement) && parametersElement.ValueKind == JsonValueKind.Array
+                ? parametersElement.EnumerateArray().Select(x => x.GetString() ?? "").ToArray()
+                : [];
+
+            modelos.Add(new ModeloOpenRouterDto(
+                modelId,
+                GetString(item, "name"),
+                ExtrairProvider(modelId),
+                GetInt(item, "context_length"),
+                ToPrecoPorMilhao(GetDecimal(pricing, "prompt")),
+                ToPrecoPorMilhao(GetDecimal(pricing, "completion")),
+                supportedParameters.Any(x => x.Equals("response_format", StringComparison.OrdinalIgnoreCase)),
+                supportedParameters.Any(x => x.Contains("tool", StringComparison.OrdinalIgnoreCase)),
+                item.GetRawText()));
+        }
+
+        return modelos;
+    }
+
+    private async Task RecalcularRecomendacoesAsync(CancellationToken cancellationToken)
+    {
+        var modelos = await db.OpenRouterModelos.Where(x => x.Ativo).ToArrayAsync(cancellationToken);
+        foreach (var modelo in modelos)
+        {
+            modelo.RecomendadoNormalizacao = false;
+            modelo.RecomendadoAnalise = false;
+            modelo.RecomendadoMensagem = false;
+        }
+
+        var normalizacao = EscolherNormalizacao(modelos);
+        var analise = EscolherAnalise(modelos);
+        var mensagem = EscolherMensagem(modelos);
+
+        if (normalizacao is not null)
+        {
+            normalizacao.RecomendadoNormalizacao = true;
+        }
+
+        if (analise is not null)
+        {
+            analise.RecomendadoAnalise = true;
+        }
+
+        if (mensagem is not null)
+        {
+            mensagem.RecomendadoMensagem = true;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private OpenRouterModelo? EscolherNormalizacao(IReadOnlyList<OpenRouterModelo> modelos)
+    {
+        return modelos
+            .Where(x => x.Ativo && (x.ContextLength ?? 0) >= _modelosOptions.MinContextLengthNormalizacao)
+            .OrderByDescending(x => x.SuportaJsonEstruturado)
+            .ThenByDescending(x => x.CustoBeneficioScore)
+            .ThenBy(x => CustoTotal(x))
+            .FirstOrDefault()
+            ?? modelos.OrderByDescending(x => x.CustoBeneficioScore).FirstOrDefault();
+    }
+
+    private OpenRouterModelo? EscolherAnalise(IReadOnlyList<OpenRouterModelo> modelos)
+    {
+        return modelos
+            .Where(x => x.Ativo && (x.ContextLength ?? 0) >= _modelosOptions.MinContextLengthAnalise)
+            .OrderByDescending(x => x.CustoBeneficioScore)
+            .ThenByDescending(x => x.ContextLength ?? 0)
+            .FirstOrDefault()
+            ?? modelos.OrderByDescending(x => x.CustoBeneficioScore).FirstOrDefault();
+    }
+
+    private static OpenRouterModelo? EscolherMensagem(IReadOnlyList<OpenRouterModelo> modelos)
+    {
+        return modelos
+            .Where(x => x.Ativo)
+            .OrderBy(x => CustoTotal(x))
+            .ThenByDescending(x => x.CustoBeneficioScore)
+            .FirstOrDefault();
+    }
+
+    private static decimal CalcularScore(OpenRouterModelo modelo)
+    {
+        var custo = CustoTotal(modelo);
+        var custoScore = custo <= 0 ? 25m : Math.Min(25m, 25m / (1m + custo));
+        var contextoScore = Math.Min(25m, ((modelo.ContextLength ?? 0) / 128_000m) * 25m);
+        var jsonScore = modelo.SuportaJsonEstruturado ? 15m : 5m;
+        var confiabilidade = modelo.TotalExecucoes == 0 ? 20m : (modelo.TotalSucessos / (decimal)modelo.TotalExecucoes) * 20m;
+        var velocidade = modelo.TempoMedioMs is null ? 10m : Math.Max(0m, 10m - ((decimal)modelo.TempoMedioMs.Value / 10_000m));
+
+        return Math.Round(custoScore + contextoScore + jsonScore + confiabilidade + velocidade, 4);
+    }
+
+    private static decimal CustoTotal(OpenRouterModelo modelo)
+    {
+        return (modelo.PrecoInputPorMilhaoTokens ?? 0) + (modelo.PrecoOutputPorMilhaoTokens ?? 0);
+    }
+
+    private static decimal? CalcularCusto(OpenRouterExecucao execucao, OpenRouterModelo modelo)
+    {
+        if (execucao.TokensInput is null && execucao.TokensOutput is null)
+        {
+            return null;
+        }
+
+        var input = ((execucao.TokensInput ?? 0) / 1_000_000m) * (modelo.PrecoInputPorMilhaoTokens ?? 0);
+        var output = ((execucao.TokensOutput ?? 0) / 1_000_000m) * (modelo.PrecoOutputPorMilhaoTokens ?? 0);
+        return Math.Round(input + output, 8);
+    }
+
+    private static OpenRouterModeloResponse ToResponse(OpenRouterModelo x)
+    {
+        return new OpenRouterModeloResponse(
+            x.ModelId,
+            x.Nome,
+            x.Provider,
+            x.ContextLength,
+            x.PrecoInputPorMilhaoTokens,
+            x.PrecoOutputPorMilhaoTokens,
+            x.SuportaJsonEstruturado,
+            x.SuportaTools,
+            x.Ativo,
+            x.RecomendadoNormalizacao,
+            x.RecomendadoAnalise,
+            x.RecomendadoMensagem,
+            x.CustoBeneficioScore,
+            x.TotalExecucoes,
+            x.TotalSucessos,
+            x.TotalFalhas,
+            x.TempoMedioMs,
+            x.UltimaAtualizacao);
+    }
+
+    private static OpenRouterModeloRecomendadoResponse ToRecomendado(OpenRouterTipoTarefa tipoTarefa, OpenRouterModelo? modelo, string motivo)
+    {
+        return new OpenRouterModeloRecomendadoResponse(tipoTarefa, modelo?.ModelId ?? "Nao configurado", modelo?.Nome, modelo?.CustoBeneficioScore ?? 0, motivo);
+    }
+
+    private static string? GetString(JsonElement element, string propertyName)
+    {
+        return element.ValueKind == JsonValueKind.Object && element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+    }
+
+    private static int? GetInt(JsonElement element, string propertyName)
+    {
+        return element.ValueKind == JsonValueKind.Object && element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var result) ? result : null;
+    }
+
+    private static decimal? GetDecimal(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number))
+        {
+            return number;
+        }
+
+        return value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static decimal? ToPrecoPorMilhao(decimal? precoPorToken)
+    {
+        return precoPorToken is null ? null : Math.Round(precoPorToken.Value * 1_000_000m, 8);
+    }
+
+    private static string? ExtrairProvider(string modelId)
+    {
+        var index = modelId.IndexOf('/', StringComparison.Ordinal);
+        return index <= 0 ? null : modelId[..index];
+    }
+
+    private sealed record ModeloOpenRouterDto(
+        string ModelId,
+        string? Nome,
+        string? Provider,
+        int? ContextLength,
+        decimal? PrecoInputPorMilhaoTokens,
+        decimal? PrecoOutputPorMilhaoTokens,
+        bool SuportaJsonEstruturado,
+        bool SuportaTools,
+        string DadosJson);
+}
