@@ -31,6 +31,13 @@ public sealed class OpenRouterModelosController(IOpenRouterModelosService servic
         return Ok(await service.ListarConfiguracoesAsync(cancellationToken));
     }
 
+    [HttpGet("metricas")]
+    [ProducesResponseType(typeof(OpenRouterMetricasResumoResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<OpenRouterMetricasResumoResponse>> Metricas([FromQuery] OpenRouterTipoTarefa? tipoTarefa = null, [FromQuery] int dias = 30, CancellationToken cancellationToken = default)
+    {
+        return Ok(await service.ListarMetricasAsync(tipoTarefa, dias, cancellationToken));
+    }
+
     [HttpPut("configuracoes/{tipoTarefa}")]
     [ProducesResponseType(typeof(OpenRouterModeloConfiguracaoResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<OpenRouterModeloConfiguracaoResponse>> Configurar(OpenRouterTipoTarefa tipoTarefa, [FromBody] ConfigurarOpenRouterModeloRequest request, CancellationToken cancellationToken)
@@ -50,5 +57,12 @@ public sealed class OpenRouterModelosController(IOpenRouterModelosService servic
     public async Task<ActionResult<OpenRouterSincronizacaoModelosResponse>> Sincronizar(CancellationToken cancellationToken)
     {
         return Ok(await service.SincronizarAsync(cancellationToken));
+    }
+
+    [HttpPost("recalcular-scores")]
+    [ProducesResponseType(typeof(OpenRouterRecalculoScoresResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<OpenRouterRecalculoScoresResponse>> RecalcularScores(CancellationToken cancellationToken)
+    {
+        return Ok(await service.RecalcularScoresAsync(cancellationToken));
     }
 }

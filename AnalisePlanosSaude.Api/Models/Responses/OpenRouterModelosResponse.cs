@@ -43,3 +43,33 @@ public sealed record OpenRouterModeloConfiguracaoResponse(
     string ModoSelecao,
     string? Motivo,
     DateTime? AtualizadoEm);
+
+public sealed record OpenRouterModeloMetricaResponse(
+    OpenRouterTipoTarefa TipoTarefa,
+    string ModelId,
+    string? Nome,
+    int TotalExecucoes,
+    int TotalSucessos,
+    int TotalFalhas,
+    decimal TaxaSucesso,
+    double TempoMedioMs,
+    int TokensInput,
+    int TokensOutput,
+    decimal CustoTotalEstimado,
+    decimal ScoreOperacional,
+    DateTime? PrimeiraExecucaoEm,
+    DateTime? UltimaExecucaoEm);
+
+public sealed record OpenRouterMetricasResumoResponse(
+    OpenRouterTipoTarefa? TipoTarefa,
+    int Dias,
+    int TotalExecucoes,
+    int TotalSucessos,
+    int TotalFalhas,
+    decimal CustoTotalEstimado,
+    IReadOnlyList<OpenRouterModeloMetricaResponse> Modelos);
+
+public sealed record OpenRouterRecalculoScoresResponse(
+    int ModelosRecalculados,
+    int ExecucoesConsideradas,
+    DateTime RecalculadoEm);

@@ -8,4 +8,6 @@ public sealed class OpenRouterModelosOptions
     public bool SelecaoAutomatica { get; set; } = true;
     public int MinContextLengthNormalizacao { get; set; } = 32_000;
     public int MinContextLengthAnalise { get; set; } = 16_000;
+    public int JanelaDiasMetricas { get; set; } = 30;
+    public int MinExecucoesSelecaoAvancada { get; set; } = 3;
 }

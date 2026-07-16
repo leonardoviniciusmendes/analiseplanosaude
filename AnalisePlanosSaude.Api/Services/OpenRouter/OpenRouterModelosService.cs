@@ -171,6 +171,72 @@ public sealed class OpenRouterModelosService(
         return ToConfiguracaoResponse(tipoTarefa, null, null);
     }
 
+    public async Task<OpenRouterMetricasResumoResponse> ListarMetricasAsync(OpenRouterTipoTarefa? tipoTarefa, int dias, CancellationToken cancellationToken)
+    {
+        dias = Math.Clamp(dias, 1, 365);
+        var desde = DateTime.UtcNow.AddDays(-dias);
+        var query = db.OpenRouterExecucoes.AsNoTracking().Where(x => x.CriadoEm >= desde);
+        if (tipoTarefa is not null)
+        {
+            query = query.Where(x => x.TipoTarefa == tipoTarefa);
+        }
+
+        var execucoes = await query.ToArrayAsync(cancellationToken);
+        var modelos = await db.OpenRouterModelos.AsNoTracking().ToDictionaryAsync(x => x.ModelId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        var metricas = execucoes
+            .GroupBy(x => new { x.TipoTarefa, x.ModelId })
+            .Select(group =>
+            {
+                modelos.TryGetValue(group.Key.ModelId, out var modelo);
+                return CriarMetrica(group.Key.TipoTarefa, group.Key.ModelId, modelo?.Nome, group);
+            })
+            .OrderByDescending(x => x.ScoreOperacional)
+            .ThenBy(x => x.CustoTotalEstimado)
+            .ToArray();
+
+        return new OpenRouterMetricasResumoResponse(
+            tipoTarefa,
+            dias,
+            execucoes.Length,
+            execucoes.Count(x => x.Sucesso),
+            execucoes.Count(x => !x.Sucesso),
+            execucoes.Sum(x => x.CustoEstimado ?? 0),
+            metricas);
+    }
+
+    public async Task<OpenRouterRecalculoScoresResponse> RecalcularScoresAsync(CancellationToken cancellationToken)
+    {
+        var modelos = await db.OpenRouterModelos.ToArrayAsync(cancellationToken);
+        var execucoes = await db.OpenRouterExecucoes.AsNoTracking().ToArrayAsync(cancellationToken);
+        var grupos = execucoes.GroupBy(x => x.ModelId).ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var modelo in modelos)
+        {
+            if (grupos.TryGetValue(modelo.ModelId, out var grupo))
+            {
+                var lista = grupo.ToArray();
+                modelo.TotalExecucoes = lista.Length;
+                modelo.TotalSucessos = lista.Count(x => x.Sucesso);
+                modelo.TotalFalhas = lista.Count(x => !x.Sucesso);
+                modelo.TempoMedioMs = lista.Length == 0 ? null : Math.Round(lista.Average(x => x.TempoMs), 2);
+            }
+            else
+            {
+                modelo.TotalExecucoes = 0;
+                modelo.TotalSucessos = 0;
+                modelo.TotalFalhas = 0;
+                modelo.TempoMedioMs = null;
+            }
+
+            modelo.CustoBeneficioScore = CalcularScore(modelo);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await RecalcularRecomendacoesAsync(cancellationToken);
+
+        return new OpenRouterRecalculoScoresResponse(modelos.Length, execucoes.Length, DateTime.UtcNow);
+    }
+
     public async Task RegistrarExecucaoAsync(OpenRouterExecucao execucao, CancellationToken cancellationToken)
     {
         db.OpenRouterExecucoes.Add(execucao);
@@ -381,6 +447,44 @@ public sealed class OpenRouterModelosService(
             config?.TravadoManual == true ? "Manual" : "Automatico",
             config?.Motivo,
             config?.AtualizadoEm);
+    }
+
+    private static OpenRouterModeloMetricaResponse CriarMetrica(OpenRouterTipoTarefa tipoTarefa, string modelId, string? nome, IEnumerable<OpenRouterExecucao> execucoes)
+    {
+        var lista = execucoes.ToArray();
+        var total = lista.Length;
+        var sucessos = lista.Count(x => x.Sucesso);
+        var falhas = lista.Count(x => !x.Sucesso);
+        var taxaSucesso = total == 0 ? 0 : Math.Round(sucessos / (decimal)total, 4);
+        var tempoMedio = total == 0 ? 0 : Math.Round(lista.Average(x => x.TempoMs), 2);
+        var custo = lista.Sum(x => x.CustoEstimado ?? 0);
+        var score = CalcularScoreOperacional(total, taxaSucesso, tempoMedio, custo);
+
+        return new OpenRouterModeloMetricaResponse(
+            tipoTarefa,
+            modelId,
+            nome,
+            total,
+            sucessos,
+            falhas,
+            taxaSucesso,
+            tempoMedio,
+            lista.Sum(x => x.TokensInput ?? 0),
+            lista.Sum(x => x.TokensOutput ?? 0),
+            custo,
+            score,
+            total == 0 ? null : lista.Min(x => x.CriadoEm),
+            total == 0 ? null : lista.Max(x => x.CriadoEm));
+    }
+
+    private static decimal CalcularScoreOperacional(int totalExecucoes, decimal taxaSucesso, double tempoMedioMs, decimal custoTotal)
+    {
+        var confiabilidade = taxaSucesso * 55m;
+        var velocidade = Math.Max(0m, 20m - ((decimal)tempoMedioMs / 2_500m));
+        var custoMedio = totalExecucoes == 0 ? 0 : custoTotal / totalExecucoes;
+        var custoScore = custoMedio <= 0 ? 15m : Math.Max(0m, 15m - (custoMedio * 10m));
+        var evidencia = Math.Min(10m, totalExecucoes);
+        return Math.Round(confiabilidade + velocidade + custoScore + evidencia, 4);
     }
 
     private static string? GetString(JsonElement element, string propertyName)
