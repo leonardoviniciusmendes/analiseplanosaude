@@ -3,6 +3,7 @@ using AnalisePlanosSaude.Api.Data;
 using AnalisePlanosSaude.Api.Models.Responses;
 using AnalisePlanosSaude.Api.Options;
 using AnalisePlanosSaude.Api.Services.Analise;
+using AnalisePlanosSaude.Api.Services.AnalisesSimulacao;
 using AnalisePlanosSaude.Api.Services.Coleta;
 using AnalisePlanosSaude.Api.Services.Coletas;
 using AnalisePlanosSaude.Api.Services.OpenRouter;
@@ -50,6 +51,7 @@ builder.Services.AddScoped<ISimuladorCollector, SimuladorCollector>();
 builder.Services.AddScoped<IOpenRouterService, OpenRouterService>();
 builder.Services.AddScoped<IAnaliseService, AnaliseService>();
 builder.Services.AddScoped<ISimulacaoColetaService, SimulacaoColetaService>();
+builder.Services.AddScoped<IAnaliseSimulacaoService, AnaliseSimulacaoService>();
 builder.Services.AddHostedService<SimulacaoColetaJobWorker>();
 
 var app = builder.Build();

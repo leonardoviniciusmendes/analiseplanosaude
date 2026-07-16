@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using AnalisePlanosSaude.Api.Models.Responses;
 using AnalisePlanosSaude.Api.Options;
 using AnalisePlanosSaude.Api.Services.Analise;
+using AnalisePlanosSaude.Api.Services.AnalisesSimulacao;
 using AnalisePlanosSaude.Api.Services.Coleta;
 using Microsoft.Extensions.Options;
 
@@ -103,6 +104,49 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
 
         var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
         return DeserializeOrThrow<ResultadoAnaliseResponse>(json);
+    }
+
+    public async Task<AnaliseSimulacaoIaTextos> GerarTextosAnaliseSimulacaoAsync(AnaliseSimulacaoDataset dataset, AnaliseSimulacaoResponse resultadoBase, CancellationToken cancellationToken)
+    {
+        var prompt = """
+        Voce e um corretor especialista em planos de saude.
+
+        Analise exclusivamente o dataset e o ranking ja calculado pelo sistema.
+        Os dados vieram da simulacao salva no banco, incluindo valores por idade e rede credenciada coletada.
+
+        Regras obrigatorias:
+        1. Nao altere valores, nomes de planos, quantidades de rede ou ranking calculado.
+        2. Nao invente hospitais, clinicas, laboratorios, coberturas, carencias ou beneficios.
+        3. Se uma informacao nao estiver no dataset, trate como "Nao informado".
+        4. Explique de forma comercial e transparente a melhor opcao de venda.
+        5. O texto deve apoiar o corretor, nao substituir confirmacao com operadora.
+        6. Mencione que rede, carencias, elegibilidade e coparticipacao devem ser confirmadas antes da contratacao.
+        7. A mensagem de WhatsApp deve ser curta, natural e apresentar no maximo tres opcoes.
+        8. Retorne somente JSON valido neste formato:
+        {
+          "resumoCorretor": "string",
+          "scriptCorretor": "string",
+          "mensagemWhatsApp": "string",
+          "mensagemWhatsAppCurta": "string",
+          "motivoMelhorOpcao": "string",
+          "objecoes": [
+            { "pergunta": "string", "respostaSugerida": "string" }
+          ]
+        }
+        """;
+
+        var payload = new
+        {
+            dataset,
+            rankingCalculado = resultadoBase.Ranking,
+            melhorOpcaoVenda = resultadoBase.MelhorOpcaoVenda,
+            maisBarato = resultadoBase.MaisBarato,
+            melhorRedeHospitalar = resultadoBase.MelhorRedeHospitalar,
+            alertas = resultadoBase.Alertas
+        };
+
+        var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+        return DeserializeOrThrow<AnaliseSimulacaoIaTextos>(json);
     }
 
     private async Task<string> ChatAsync(string systemPrompt, string userPayload, CancellationToken cancellationToken)

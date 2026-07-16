@@ -12,6 +12,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<SimulacaoValorFaixa> SimulacoesValoresFaixa => Set<SimulacaoValorFaixa>();
     public DbSet<SimulacaoPrestador> SimulacoesPrestadores => Set<SimulacaoPrestador>();
     public DbSet<SimulacaoJob> SimulacoesJobs => Set<SimulacaoJob>();
+    public DbSet<SimulacaoAnalise> SimulacoesAnalises => Set<SimulacaoAnalise>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -132,6 +133,31 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(x => x.CriadoEm).IsRequired();
             entity.HasIndex(x => new { x.Status, x.CriadoEm });
             entity.HasIndex(x => new { x.SimulacaoColetaId, x.Tipo }).IsUnique();
+        });
+
+        modelBuilder.Entity<SimulacaoAnalise>(entity =>
+        {
+            entity.ToTable("SimulacoesAnalises");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.LinkOriginal).HasMaxLength(2048).IsRequired();
+            entity.Property(x => x.HashSimulacao).HasMaxLength(120).IsRequired();
+            entity.Property(x => x.IdadesJson).HasColumnType("json").IsRequired();
+            entity.Property(x => x.FaixasUtilizadasJson).HasColumnType("json").IsRequired();
+            entity.Property(x => x.PrioridadesJson).HasColumnType("json").IsRequired();
+            entity.Property(x => x.Observacoes).HasColumnType("text");
+            entity.Property(x => x.Status).HasMaxLength(40).IsRequired();
+            entity.Property(x => x.DatasetJson).HasColumnType("longtext");
+            entity.Property(x => x.ResultadoJson).HasColumnType("longtext");
+            entity.Property(x => x.ResumoCorretor).HasColumnType("longtext");
+            entity.Property(x => x.ScriptCorretor).HasColumnType("longtext");
+            entity.Property(x => x.MensagemWhatsApp).HasColumnType("longtext");
+            entity.Property(x => x.Erro).HasColumnType("longtext");
+            entity.Property(x => x.CriadoEm).IsRequired();
+            entity.HasIndex(x => x.HashSimulacao);
+            entity.HasOne(x => x.SimulacaoColeta)
+                .WithMany()
+                .HasForeignKey(x => x.SimulacaoColetaId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
