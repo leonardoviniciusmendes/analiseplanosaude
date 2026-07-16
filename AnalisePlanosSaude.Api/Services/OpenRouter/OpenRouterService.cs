@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using AnalisePlanosSaude.Api.Models.Responses;
 using AnalisePlanosSaude.Api.Options;
 using AnalisePlanosSaude.Api.Services.Analise;
+using AnalisePlanosSaude.Api.Services.AnalisesComerciais;
 using AnalisePlanosSaude.Api.Services.AnalisesSimulacao;
 using AnalisePlanosSaude.Api.Services.Coleta;
 using Microsoft.Extensions.Options;
@@ -147,6 +148,70 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
 
         var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
         return DeserializeOrThrow<AnaliseSimulacaoIaTextos>(json);
+    }
+
+    public async Task<AnaliseComercialIaTextos> GerarTextosAnaliseComercialAsync(AnaliseComercialDataset dataset, AnaliseComercialResponse resultadoBase, CancellationToken cancellationToken)
+    {
+        var prompt = """
+        Voce e um consultor comercial especialista em planos de saude.
+
+        Use exclusivamente o dataset e o ranking calculado pela API.
+        A API ja calculou valores, rede, melhor opcao para cliente, melhor opcao para o corretor vender e estrategia de fechamento.
+
+        Regras obrigatorias:
+        1. Nao altere valores, ranking, nomes de planos, operadoras ou quantidades de rede.
+        2. Nao invente hospitais, clinicas, laboratorios, coberturas, carencias ou beneficios.
+        3. Separe claramente orientacao para corretor e mensagens para cliente.
+        4. Gere mensagens naturais para WhatsApp.
+        5. Crie uma mensagem inicial de captacao para buscar novos clientes.
+        6. Crie uma mensagem de apresentacao e uma de fechamento.
+        7. Oriente o corretor a confirmar rede, carencias, elegibilidade e coparticipacao antes da contratacao.
+        8. A estrategia comercial deve comparar todos os planos e separar premium/mais caro, intermediario, custo-beneficio e mais barato.
+        9. O melhor para o corretor nao deve ser automaticamente o mais caro; use o mais caro como ancora premium quando fizer sentido.
+        10. Explique por que os planos nao escolhidos como principal ainda entram no comparativo.
+        11. Retorne somente JSON valido no formato:
+        {
+          "analiseCorretor": {
+            "resumoEstrategico": "string",
+            "argumentosDeVenda": ["string"],
+            "pontosDeAtencao": ["string"],
+            "perguntasParaQualificar": ["string"],
+            "comoConduzirConversa": "string"
+          },
+          "mensagensCliente": {
+            "captacaoInicial": "string",
+            "apresentacaoOpcoes": "string",
+            "followUp": "string",
+            "fechamento": "string"
+          },
+          "objecoes": [
+            { "pergunta": "string", "respostaSugerida": "string" }
+          ],
+          "motivoMelhorCliente": "string",
+          "motivoMelhorCorretor": "string",
+          "estrategiaUso": "string",
+          "ordemApresentacao": ["string"]
+        }
+        """;
+
+        var payload = new
+        {
+            entrada = dataset.Entrada,
+            planos = dataset.Planos.Take(15),
+            resultadoCalculado = new
+            {
+                resultadoBase.MelhorParaCliente,
+                resultadoBase.MelhorParaCorretorVender,
+                resultadoBase.MaisEconomico,
+                resultadoBase.MelhorRede,
+                resultadoBase.EstrategiaFechamento,
+                ranking = resultadoBase.Ranking.Take(15),
+                resultadoBase.Alertas
+            }
+        };
+
+        var json = await ChatAsync(prompt, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+        return DeserializeOrThrow<AnaliseComercialIaTextos>(json);
     }
 
     private async Task<string> ChatAsync(string systemPrompt, string userPayload, CancellationToken cancellationToken)

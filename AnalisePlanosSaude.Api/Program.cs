@@ -3,6 +3,7 @@ using AnalisePlanosSaude.Api.Data;
 using AnalisePlanosSaude.Api.Models.Responses;
 using AnalisePlanosSaude.Api.Options;
 using AnalisePlanosSaude.Api.Services.Analise;
+using AnalisePlanosSaude.Api.Services.AnalisesComerciais;
 using AnalisePlanosSaude.Api.Services.AnalisesSimulacao;
 using AnalisePlanosSaude.Api.Services.Coleta;
 using AnalisePlanosSaude.Api.Services.Coletas;
@@ -57,6 +58,7 @@ builder.Services.AddScoped<ISimulacaoHistoricoService, SimulacaoHistoricoService
 builder.Services.AddScoped<ISimulacaoAtualizacaoService, SimulacaoAtualizacaoService>();
 builder.Services.AddHostedService<SimulacaoColetaJobWorker>();
 builder.Services.AddHostedService<SimulacaoAtualizacaoDiariaWorker>();
+builder.Services.AddHostedService<AnaliseComercialWorker>();
 
 var app = builder.Build();
 
