@@ -4,6 +4,7 @@ using AnalisePlanosSaude.Api.Models.Responses;
 using AnalisePlanosSaude.Api.Options;
 using AnalisePlanosSaude.Api.Services.Analise;
 using AnalisePlanosSaude.Api.Services.Coleta;
+using AnalisePlanosSaude.Api.Services.Coletas;
 using AnalisePlanosSaude.Api.Services.OpenRouter;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http.Features;
@@ -48,6 +49,8 @@ builder.Services.AddHttpClient("OpenRouter");
 builder.Services.AddScoped<ISimuladorCollector, SimuladorCollector>();
 builder.Services.AddScoped<IOpenRouterService, OpenRouterService>();
 builder.Services.AddScoped<IAnaliseService, AnaliseService>();
+builder.Services.AddScoped<ISimulacaoColetaService, SimulacaoColetaService>();
+builder.Services.AddHostedService<SimulacaoColetaJobWorker>();
 
 var app = builder.Build();
 

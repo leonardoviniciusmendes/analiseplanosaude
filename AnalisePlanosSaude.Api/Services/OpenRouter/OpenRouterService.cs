@@ -51,6 +51,7 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
             chamadasJson = coleta.RespostasJson,
             elementosEncontrados = coleta.ElementosEncontrados,
             secoesEDetalhes = coleta.SecoesColetadas,
+            redeCredenciadaPorPlano = coleta.RedesPorPlano,
             contrato = "Cada item de planos deve seguir o contrato PlanoNormalizado: urlOrigem, operadora, plano, registroAns, valorTotal, valoresPorIdade, tipoContratacao, acomodacao, abrangencia, segmentacao, reembolso, elegibilidade, carencia, coparticipacao, coparticipacaoTerapias, documentacaoNecessaria, areaComercializacao, odontologia, hospitais, clinicas, laboratorios, centrosDiagnostico, prontosSocorros, observacoes, evidencias, camposNaoEncontrados."
         };
 
@@ -115,6 +116,7 @@ public sealed class OpenRouterService(IHttpClientFactory httpClientFactory, IOpt
         timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, _options.TimeoutSeconds)));
 
         var client = httpClientFactory.CreateClient("OpenRouter");
+        client.Timeout = Timeout.InfiniteTimeSpan;
         client.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
         client.DefaultRequestHeaders.Remove("HTTP-Referer");
