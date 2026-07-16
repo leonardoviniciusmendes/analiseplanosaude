@@ -13,6 +13,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<SimulacaoPrestador> SimulacoesPrestadores => Set<SimulacaoPrestador>();
     public DbSet<SimulacaoJob> SimulacoesJobs => Set<SimulacaoJob>();
     public DbSet<SimulacaoAnalise> SimulacoesAnalises => Set<SimulacaoAnalise>();
+    public DbSet<SimulacaoAtualizacaoJob> SimulacoesAtualizacoesJobs => Set<SimulacaoAtualizacaoJob>();
+    public DbSet<SimulacaoColetaVersao> SimulacoesColetasVersoes => Set<SimulacaoColetaVersao>();
+    public DbSet<SimulacaoPlanoVersao> SimulacoesPlanosVersoes => Set<SimulacaoPlanoVersao>();
+    public DbSet<SimulacaoValorFaixaVersao> SimulacoesValoresFaixaVersoes => Set<SimulacaoValorFaixaVersao>();
+    public DbSet<SimulacaoPrestadorVersao> SimulacoesPrestadoresVersoes => Set<SimulacaoPrestadorVersao>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -73,6 +78,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithOne(x => x.SimulacaoColeta)
                 .HasForeignKey(x => x.SimulacaoColetaId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(x => x.Atualizacoes)
+                .WithOne(x => x.SimulacaoColeta)
+                .HasForeignKey(x => x.SimulacaoColetaId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(x => x.Versoes)
+                .WithOne(x => x.SimulacaoColeta)
+                .HasForeignKey(x => x.SimulacaoColetaId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<SimulacaoPlano>(entity =>
@@ -80,12 +93,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.ToTable("SimulacoesPlanos");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.PlanoIdExterno).HasMaxLength(80).IsRequired();
+            entity.Property(x => x.Operadora).HasMaxLength(160);
+            entity.Property(x => x.TipoTabela).HasConversion<string>().HasMaxLength(40).HasDefaultValue(TipoTabelaPlano.NaoInformado).IsRequired();
             entity.Property(x => x.Nome).HasMaxLength(300).IsRequired();
             entity.Property(x => x.Acomodacao).HasMaxLength(120);
             entity.Property(x => x.ValorTotal).HasPrecision(18, 2);
             entity.Property(x => x.DadosJson).HasColumnType("longtext");
             entity.Property(x => x.CriadoEm).IsRequired();
-            entity.HasIndex(x => new { x.SimulacaoColetaId, x.PlanoIdExterno }).IsUnique();
+            entity.HasIndex(x => x.PlanoIdExterno).IsUnique();
             entity.HasMany(x => x.ValoresFaixa)
                 .WithOne(x => x.SimulacaoPlano)
                 .HasForeignKey(x => x.SimulacaoPlanoId)
@@ -158,6 +173,84 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithMany()
                 .HasForeignKey(x => x.SimulacaoColetaId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SimulacaoAtualizacaoJob>(entity =>
+        {
+            entity.ToTable("SimulacoesAtualizacoesJobs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(40).IsRequired();
+            entity.Property(x => x.Motivo).HasMaxLength(120).IsRequired();
+            entity.Property(x => x.DiffJson).HasColumnType("longtext");
+            entity.Property(x => x.Erro).HasColumnType("longtext");
+            entity.Property(x => x.CriadoEm).IsRequired();
+            entity.HasIndex(x => new { x.Status, x.CriadoEm });
+            entity.HasIndex(x => x.SimulacaoColetaId);
+        });
+
+        modelBuilder.Entity<SimulacaoColetaVersao>(entity =>
+        {
+            entity.ToTable("SimulacoesColetasVersoes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(40).IsRequired();
+            entity.Property(x => x.JsonPrincipal).HasColumnType("longtext");
+            entity.Property(x => x.JsonRede).HasColumnType("longtext");
+            entity.Property(x => x.HashConteudo).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.DiffJson).HasColumnType("longtext").IsRequired();
+            entity.Property(x => x.CriadoEm).IsRequired();
+            entity.HasIndex(x => new { x.SimulacaoColetaId, x.Versao }).IsUnique();
+            entity.HasIndex(x => x.HashConteudo);
+            entity.HasMany(x => x.Planos)
+                .WithOne(x => x.SimulacaoColetaVersao)
+                .HasForeignKey(x => x.SimulacaoColetaVersaoId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SimulacaoPlanoVersao>(entity =>
+        {
+            entity.ToTable("SimulacoesPlanosVersoes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.PlanoIdExterno).HasMaxLength(80).IsRequired();
+            entity.Property(x => x.Operadora).HasMaxLength(160);
+            entity.Property(x => x.TipoTabela).HasConversion<string>().HasMaxLength(40).HasDefaultValue(TipoTabelaPlano.NaoInformado).IsRequired();
+            entity.Property(x => x.Nome).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.Acomodacao).HasMaxLength(120);
+            entity.Property(x => x.ValorTotal).HasPrecision(18, 2);
+            entity.Property(x => x.DadosJson).HasColumnType("longtext");
+            entity.HasIndex(x => new { x.SimulacaoColetaVersaoId, x.PlanoIdExterno });
+            entity.HasMany(x => x.ValoresFaixa)
+                .WithOne(x => x.SimulacaoPlanoVersao)
+                .HasForeignKey(x => x.SimulacaoPlanoVersaoId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(x => x.Prestadores)
+                .WithOne(x => x.SimulacaoPlanoVersao)
+                .HasForeignKey(x => x.SimulacaoPlanoVersaoId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SimulacaoValorFaixaVersao>(entity =>
+        {
+            entity.ToTable("SimulacoesValoresFaixaVersoes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Faixa).HasMaxLength(80).IsRequired();
+            entity.Property(x => x.Valor).HasPrecision(18, 2).IsRequired();
+            entity.HasIndex(x => x.SimulacaoPlanoVersaoId);
+        });
+
+        modelBuilder.Entity<SimulacaoPrestadorVersao>(entity =>
+        {
+            entity.ToTable("SimulacoesPrestadoresVersoes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Tipo).HasMaxLength(80).IsRequired();
+            entity.Property(x => x.Nome).HasMaxLength(500).IsRequired();
+            entity.Property(x => x.Bairro).HasMaxLength(200);
+            entity.Property(x => x.Cidade).HasMaxLength(200);
+            entity.Property(x => x.Uf).HasMaxLength(2);
+            entity.Property(x => x.Endereco).HasMaxLength(600);
+            entity.Property(x => x.EspecialidadesJson).HasColumnType("json").IsRequired();
+            entity.Property(x => x.TextoEvidencia).HasColumnType("text");
+            entity.HasIndex(x => x.SimulacaoPlanoVersaoId);
+            entity.HasIndex(x => new { x.SimulacaoPlanoVersaoId, x.Tipo });
         });
     }
 }

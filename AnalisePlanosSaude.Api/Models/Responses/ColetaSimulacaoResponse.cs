@@ -31,6 +31,8 @@ public sealed record ColetaJobResponse(
 public sealed record ColetaPlanoResponse(
     Guid Id,
     string PlanoIdExterno,
+    string? Operadora,
+    TipoTabelaPlano TipoTabela,
     string Nome,
     string? Acomodacao,
     decimal? ValorTotal,

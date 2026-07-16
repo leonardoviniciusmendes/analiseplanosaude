@@ -1,9 +1,9 @@
 namespace AnalisePlanosSaude.Api.Entities;
 
-public sealed class SimulacaoPlano
+public sealed class SimulacaoPlanoVersao
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public Guid SimulacaoColetaId { get; set; }
+    public Guid SimulacaoColetaVersaoId { get; set; }
     public string PlanoIdExterno { get; set; } = "";
     public string? Operadora { get; set; }
     public TipoTabelaPlano TipoTabela { get; set; } = TipoTabelaPlano.NaoInformado;
@@ -11,8 +11,7 @@ public sealed class SimulacaoPlano
     public string? Acomodacao { get; set; }
     public decimal? ValorTotal { get; set; }
     public string? DadosJson { get; set; }
-    public DateTime CriadoEm { get; set; } = DateTime.UtcNow;
-    public SimulacaoColeta SimulacaoColeta { get; set; } = null!;
-    public List<SimulacaoValorFaixa> ValoresFaixa { get; set; } = [];
-    public List<SimulacaoPrestador> Prestadores { get; set; } = [];
+    public SimulacaoColetaVersao SimulacaoColetaVersao { get; set; } = null!;
+    public List<SimulacaoValorFaixaVersao> ValoresFaixa { get; set; } = [];
+    public List<SimulacaoPrestadorVersao> Prestadores { get; set; } = [];
 }

@@ -4,6 +4,7 @@ using AnalisePlanosSaude.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AnalisePlanosSaude.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260716125325_HistoricoAtualizacaoSimulacoes")]
+    partial class HistoricoAtualizacaoSimulacoes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -417,10 +420,6 @@ namespace AnalisePlanosSaude.Api.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("varchar(300)");
 
-                    b.Property<string>("Operadora")
-                        .HasMaxLength(160)
-                        .HasColumnType("varchar(160)");
-
                     b.Property<string>("PlanoIdExterno")
                         .IsRequired()
                         .HasMaxLength(80)
@@ -429,23 +428,14 @@ namespace AnalisePlanosSaude.Api.Migrations
                     b.Property<Guid>("SimulacaoColetaId")
                         .HasColumnType("char(36)");
 
-                    b.Property<string>("TipoTabela")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(40)
-                        .HasColumnType("varchar(40)")
-                        .HasDefaultValue("NaoInformado");
-
                     b.Property<decimal?>("ValorTotal")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("PlanoIdExterno")
+                    b.HasIndex("SimulacaoColetaId", "PlanoIdExterno")
                         .IsUnique();
-
-                    b.HasIndex("SimulacaoColetaId");
 
                     b.ToTable("SimulacoesPlanos", (string)null);
                 });
@@ -468,10 +458,6 @@ namespace AnalisePlanosSaude.Api.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("varchar(300)");
 
-                    b.Property<string>("Operadora")
-                        .HasMaxLength(160)
-                        .HasColumnType("varchar(160)");
-
                     b.Property<string>("PlanoIdExterno")
                         .IsRequired()
                         .HasMaxLength(80)
@@ -479,13 +465,6 @@ namespace AnalisePlanosSaude.Api.Migrations
 
                     b.Property<Guid>("SimulacaoColetaVersaoId")
                         .HasColumnType("char(36)");
-
-                    b.Property<string>("TipoTabela")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(40)
-                        .HasColumnType("varchar(40)")
-                        .HasDefaultValue("NaoInformado");
 
                     b.Property<decimal?>("ValorTotal")
                         .HasPrecision(18, 2)

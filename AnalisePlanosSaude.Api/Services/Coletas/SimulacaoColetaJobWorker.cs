@@ -16,6 +16,48 @@ public sealed class SimulacaoColetaJobWorker(
     ILogger<SimulacaoColetaJobWorker> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string[] CamposOperadora =
+    [
+        "operadora",
+        "operadora_nome",
+        "nome_operadora",
+        "seguradora",
+        "seguradora_nome",
+        "administradora",
+        "administradora_nome",
+        "produto_operadora",
+        "empresa"
+    ];
+
+    private static readonly string[] CamposTipoTabela =
+    [
+        "tipo_tabela",
+        "tipoTabela",
+        "tabela",
+        "nome_tabela",
+        "modalidade",
+        "contratacao",
+        "tipo_contratacao",
+        "tipoContratacao",
+        "categoria",
+        "segmento"
+    ];
+
+    private static readonly IReadOnlyList<(string Nome, string[] Termos)> OperadorasConhecidas =
+    [
+        ("Amil", ["AMIL"]),
+        ("Unimed", ["UNIMED"]),
+        ("Assim", ["ASSIM"]),
+        ("Bradesco Saude", ["BRADESCO SAUDE", "BRADESCO"]),
+        ("SulAmerica", ["SULAMERICA", "SUL AMERICA"]),
+        ("NotreDame Intermedica", ["NOTREDAME", "NOTRE DAME", "GNDI", "INTERMEDICA"]),
+        ("Hapvida", ["HAPVIDA"]),
+        ("Porto Seguro", ["PORTO SEGURO"]),
+        ("MedSenior", ["MEDSENIOR"]),
+        ("Prevent Senior", ["PREVENT SENIOR"]),
+        ("Golden Cross", ["GOLDEN CROSS"])
+    ];
+
     private static readonly SimulacaoJobTipo[] Ordem =
     [
         SimulacaoJobTipo.ColetarJsonPrincipal,
@@ -54,6 +96,7 @@ public sealed class SimulacaoColetaJobWorker(
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var historico = scope.ServiceProvider.GetRequiredService<ISimulacaoHistoricoService>();
         await RecuperarJobsTravadosAsync(db, cancellationToken);
 
         var coletas = await db.SimulacoesColetas
@@ -73,7 +116,7 @@ public sealed class SimulacaoColetaJobWorker(
 
             var coletaCompleta = await CarregarColetaParaJobAsync(db, coleta.Id, job.Tipo, cancellationToken);
             var jobCompleto = coletaCompleta.Jobs.First(x => x.Id == job.Id);
-            await ExecutarJobAsync(db, coletaCompleta, jobCompleto, cancellationToken);
+            await ExecutarJobAsync(db, historico, coletaCompleta, jobCompleto, cancellationToken);
             return true;
         }
 
@@ -105,7 +148,9 @@ public sealed class SimulacaoColetaJobWorker(
         var query = db.SimulacoesColetas.Include(x => x.Jobs).AsQueryable();
         if (tipo is SimulacaoJobTipo.ConsolidarDados)
         {
-            query = query.Include(x => x.Planos).ThenInclude(x => x.Prestadores);
+            query = query
+                .Include(x => x.Planos).ThenInclude(x => x.Prestadores)
+                .Include(x => x.Planos).ThenInclude(x => x.ValoresFaixa);
         }
         else if (tipo is SimulacaoJobTipo.ExtrairRedeCredenciada)
         {
@@ -144,7 +189,7 @@ public sealed class SimulacaoColetaJobWorker(
         return null;
     }
 
-    private async Task ExecutarJobAsync(AppDbContext db, SimulacaoColeta coleta, SimulacaoJob job, CancellationToken cancellationToken)
+    private async Task ExecutarJobAsync(AppDbContext db, ISimulacaoHistoricoService historico, SimulacaoColeta coleta, SimulacaoJob job, CancellationToken cancellationToken)
     {
         job.Status = SimulacaoJobStatus.Executando;
         job.Tentativas++;
@@ -176,6 +221,7 @@ public sealed class SimulacaoColetaJobWorker(
                     break;
                 case SimulacaoJobTipo.ConsolidarDados:
                     Consolidar(coleta, job);
+                    await historico.CriarVersaoAsync(coleta, cancellationToken);
                     break;
                 case SimulacaoJobTipo.AnalisarComIa:
                     job.Status = SimulacaoJobStatus.Ignorado;
@@ -201,7 +247,28 @@ public sealed class SimulacaoColetaJobWorker(
             coleta.Status = job.Status == SimulacaoJobStatus.Erro ? SimulacaoColetaStatus.ColetaConcluidaComErros : coleta.Status;
             coleta.Erro = ex.Message;
             coleta.AtualizadoEm = DateTime.UtcNow;
+            await MarcarAtualizacaoComErroAsync(db, coleta.Id, ex.Message, job.Status == SimulacaoJobStatus.Erro, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private static async Task MarcarAtualizacaoComErroAsync(AppDbContext db, Guid coletaId, string erro, bool erroFinal, CancellationToken cancellationToken)
+    {
+        var atualizacao = await db.SimulacoesAtualizacoesJobs
+            .Where(x => x.SimulacaoColetaId == coletaId && x.Status == SimulacaoAtualizacaoJobStatus.Executando)
+            .OrderByDescending(x => x.CriadoEm)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (atualizacao is null)
+        {
+            return;
+        }
+
+        atualizacao.Erro = erro;
+        if (erroFinal)
+        {
+            atualizacao.Status = SimulacaoAtualizacaoJobStatus.Erro;
+            atualizacao.FinalizadoEm = DateTime.UtcNow;
         }
     }
 
@@ -229,14 +296,35 @@ public sealed class SimulacaoColetaJobWorker(
         var planosJson = item.GetProperty("planos").EnumerateArray().ToArray();
         var totais = item.GetProperty("valores").GetProperty("totais").EnumerateArray().Select(ParseDecimal).ToArray();
         var faixas = item.GetProperty("valores").GetProperty("faixas").EnumerateArray().ToArray();
+        var idsExtraidos = planosJson
+            .Select((planoJson, index) => JsonText(planoJson, "id") ?? $"indice-{index}")
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var idsJaExistentes = await db.SimulacoesPlanos.AsNoTracking()
+            .Where(x => idsExtraidos.Contains(x.PlanoIdExterno))
+            .Select(x => x.PlanoIdExterno)
+            .ToListAsync(cancellationToken);
+        var idsInseridosNestaExecucao = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var idsBloqueados = new HashSet<string>(idsJaExistentes, StringComparer.OrdinalIgnoreCase);
+        var planosIgnorados = 0;
 
         for (var i = 0; i < planosJson.Length; i++)
         {
             var planoJson = planosJson[i];
+            var planoIdExterno = JsonText(planoJson, "id") ?? $"indice-{i}";
+            if (idsBloqueados.Contains(planoIdExterno) || !idsInseridosNestaExecucao.Add(planoIdExterno))
+            {
+                planosIgnorados++;
+                continue;
+            }
+
             var plano = new SimulacaoPlano
             {
                 SimulacaoColetaId = coleta.Id,
-                PlanoIdExterno = JsonText(planoJson, "id") ?? $"indice-{i}",
+                PlanoIdExterno = planoIdExterno,
+                Operadora = ExtrairOperadora(planoJson, item, doc.RootElement),
+                TipoTabela = ExtrairTipoTabela(planoJson, item, doc.RootElement),
                 Nome = JsonText(planoJson, "nome") ?? $"Plano {i + 1}",
                 ValorTotal = i < totais.Length ? totais[i] : null,
                 DadosJson = planoJson.GetRawText()
@@ -264,7 +352,13 @@ public sealed class SimulacaoColetaJobWorker(
             db.SimulacoesPlanos.Add(plano);
         }
 
-        job.ResultadoJson = JsonSerializer.Serialize(new { planos = planosJson.Length, valores = faixas.Length * planosJson.Length }, JsonOptions);
+        job.ResultadoJson = JsonSerializer.Serialize(new
+        {
+            planosEncontrados = planosJson.Length,
+            planosInseridos = idsInseridosNestaExecucao.Count,
+            planosIgnoradosPorDuplicidade = planosIgnorados,
+            valores = faixas.Length * idsInseridosNestaExecucao.Count
+        }, JsonOptions);
     }
 
     private async Task DescobrirEndpointRedeAsync(SimulacaoColeta coleta, SimulacaoJob job, CancellationToken cancellationToken)
@@ -459,6 +553,220 @@ public sealed class SimulacaoColetaJobWorker(
             SimulacaoJobTipo.ConsolidarDados => SimulacaoColetaStatus.ColetaConcluida,
             SimulacaoJobTipo.AnalisarComIa => SimulacaoColetaStatus.AnalisandoIa,
             _ => SimulacaoColetaStatus.Criada
+        };
+    }
+
+    private static string? ExtrairOperadora(JsonElement planoJson, JsonElement item, JsonElement root)
+    {
+        var explicita = PrimeiroTextoEncontrado(CamposOperadora, planoJson, item, root);
+        var operadoraExplicita = NormalizarValorLivre(explicita);
+        if (!string.IsNullOrWhiteSpace(operadoraExplicita))
+        {
+            return operadoraExplicita;
+        }
+
+        var texto = TextoParaInferencia(planoJson, item, root);
+        return InferirOperadoraConhecida(texto);
+    }
+
+    private static TipoTabelaPlano ExtrairTipoTabela(JsonElement planoJson, JsonElement item, JsonElement root)
+    {
+        var explicita = PrimeiroTextoEncontrado(CamposTipoTabela, planoJson, item, root);
+        var tipoPorCampo = InferirTipoTabelaPorTexto(explicita);
+        if (tipoPorCampo != TipoTabelaPlano.NaoInformado)
+        {
+            return tipoPorCampo;
+        }
+
+        return InferirTipoTabelaPorTexto(TextoParaInferencia(planoJson, item, root));
+    }
+
+    private static string? PrimeiroTextoEncontrado(IReadOnlyCollection<string> propriedades, params JsonElement[] fontes)
+    {
+        var nomes = propriedades.Select(NormalizarNomePropriedade).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var fonte in fontes)
+        {
+            var value = ProcurarTextoPorPropriedade(fonte, nomes, 0, 5);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ProcurarTextoPorPropriedade(JsonElement element, HashSet<string> nomes, int profundidade, int profundidadeMaxima)
+    {
+        if (profundidade > profundidadeMaxima)
+        {
+            return null;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (nomes.Contains(NormalizarNomePropriedade(property.Name)))
+                {
+                    var text = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        return text;
+                    }
+                }
+
+                var nested = ProcurarTextoPorPropriedade(property.Value, nomes, profundidade + 1, profundidadeMaxima);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = ProcurarTextoPorPropriedade(item, nomes, profundidade + 1, profundidadeMaxima);
+                if (!string.IsNullOrWhiteSpace(nested))
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string TextoParaInferencia(params JsonElement[] fontes)
+    {
+        var textos = new List<string>();
+        foreach (var fonte in fontes)
+        {
+            ColetarTextos(fonte, textos, 0, 4);
+        }
+
+        return string.Join(' ', textos.Where(x => !string.IsNullOrWhiteSpace(x)).Take(300));
+    }
+
+    private static void ColetarTextos(JsonElement element, List<string> textos, int profundidade, int profundidadeMaxima)
+    {
+        if (profundidade > profundidadeMaxima || textos.Count >= 300)
+        {
+            return;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number)
+                {
+                    var text = ValorComoTexto(property.Value);
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        textos.Add(text);
+                    }
+                }
+                else
+                {
+                    ColetarTextos(property.Value, textos, profundidade + 1, profundidadeMaxima);
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                ColetarTextos(item, textos, profundidade + 1, profundidadeMaxima);
+            }
+        }
+    }
+
+    private static string? InferirOperadoraConhecida(string? texto)
+    {
+        if (string.IsNullOrWhiteSpace(texto))
+        {
+            return null;
+        }
+
+        var normalizado = Normalizar(texto);
+        var encontradas = OperadorasConhecidas
+            .Where(x => x.Termos.Any(termo => normalizado.Contains(Normalizar(termo), StringComparison.OrdinalIgnoreCase)))
+            .Select(x => x.Nome)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return encontradas.Length == 1 ? encontradas[0] : null;
+    }
+
+    private static TipoTabelaPlano InferirTipoTabelaPorTexto(string? texto)
+    {
+        if (string.IsNullOrWhiteSpace(texto))
+        {
+            return TipoTabelaPlano.NaoInformado;
+        }
+
+        var normalizado = Normalizar(texto);
+        var adesao = normalizado.Contains("ADESAO", StringComparison.OrdinalIgnoreCase);
+        var empresarial = normalizado.Contains("PME", StringComparison.OrdinalIgnoreCase)
+            || normalizado.Contains("PMP", StringComparison.OrdinalIgnoreCase)
+            || normalizado.Contains("EMPRESARIAL", StringComparison.OrdinalIgnoreCase)
+            || normalizado.Contains("EMPRESA", StringComparison.OrdinalIgnoreCase);
+
+        if (adesao && empresarial)
+        {
+            return TipoTabelaPlano.AdesaoPmeEmpresarial;
+        }
+
+        if (empresarial)
+        {
+            return TipoTabelaPlano.PmeEmpresarial;
+        }
+
+        if (adesao)
+        {
+            return TipoTabelaPlano.Adesao;
+        }
+
+        if (normalizado.Contains("FAMILIAR", StringComparison.OrdinalIgnoreCase))
+        {
+            return TipoTabelaPlano.Familiar;
+        }
+
+        if (normalizado.Contains("INDIVIDUAL", StringComparison.OrdinalIgnoreCase))
+        {
+            return TipoTabelaPlano.Individual;
+        }
+
+        return TipoTabelaPlano.NaoInformado;
+    }
+
+    private static string? NormalizarValorLivre(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var clean = Regex.Replace(value.Trim(), @"\s+", " ");
+        return clean.Length > 160 ? clean[..160] : clean;
+    }
+
+    private static string NormalizarNomePropriedade(string value)
+    {
+        return Normalizar(value).Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal);
+    }
+
+    private static string? ValorComoTexto(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
         };
     }
 

@@ -15,6 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<OpenRouterOptions>(builder.Configuration.GetSection("OpenRouter"));
 builder.Services.Configure<PlaywrightOptions>(builder.Configuration.GetSection("Playwright"));
+builder.Services.Configure<AtualizacaoSimulacoesOptions>(builder.Configuration.GetSection("AtualizacaoSimulacoes"));
 
 builder.Services.Configure<FormOptions>(options =>
 {
@@ -52,7 +53,10 @@ builder.Services.AddScoped<IOpenRouterService, OpenRouterService>();
 builder.Services.AddScoped<IAnaliseService, AnaliseService>();
 builder.Services.AddScoped<ISimulacaoColetaService, SimulacaoColetaService>();
 builder.Services.AddScoped<IAnaliseSimulacaoService, AnaliseSimulacaoService>();
+builder.Services.AddScoped<ISimulacaoHistoricoService, SimulacaoHistoricoService>();
+builder.Services.AddScoped<ISimulacaoAtualizacaoService, SimulacaoAtualizacaoService>();
 builder.Services.AddHostedService<SimulacaoColetaJobWorker>();
+builder.Services.AddHostedService<SimulacaoAtualizacaoDiariaWorker>();
 
 var app = builder.Build();
 

@@ -149,7 +149,7 @@ public sealed class SimulacaoColetaService(AppDbContext db) : ISimulacaoColetaSe
             var clinicas = plano.Prestadores.Count(x => x.Tipo == "Clinica");
             var laboratorios = plano.Prestadores.Count(x => x.Tipo == "Laboratorio");
             var outros = plano.Prestadores.Count - hospitais - clinicas - laboratorios;
-            return new ColetaPlanoResponse(plano.Id, plano.PlanoIdExterno, plano.Nome, plano.Acomodacao, plano.ValorTotal, hospitais, clinicas, laboratorios, outros);
+            return new ColetaPlanoResponse(plano.Id, plano.PlanoIdExterno, plano.Operadora, plano.TipoTabela, plano.Nome, plano.Acomodacao, plano.ValorTotal, hospitais, clinicas, laboratorios, outros);
         }).ToArray();
 
         return new ColetaSimulacaoResponse(

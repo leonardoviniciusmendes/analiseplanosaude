@@ -16,4 +16,6 @@ public sealed class SimulacaoColeta
     public DateTime? ProcessadoEm { get; set; }
     public List<SimulacaoPlano> Planos { get; set; } = [];
     public List<SimulacaoJob> Jobs { get; set; } = [];
+    public List<SimulacaoAtualizacaoJob> Atualizacoes { get; set; } = [];
+    public List<SimulacaoColetaVersao> Versoes { get; set; } = [];
 }
