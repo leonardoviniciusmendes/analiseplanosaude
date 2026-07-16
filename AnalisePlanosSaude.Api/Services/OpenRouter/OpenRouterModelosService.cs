@@ -5,6 +5,7 @@ using AnalisePlanosSaude.Api.Data;
 using AnalisePlanosSaude.Api.Entities;
 using AnalisePlanosSaude.Api.Models.Responses;
 using AnalisePlanosSaude.Api.Options;
+using AnalisePlanosSaude.Api.Services.Analise;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -110,6 +111,64 @@ public sealed class OpenRouterModelosService(
             ToRecomendado(OpenRouterTipoTarefa.MensagemCliente, EscolherMensagem(modelos), "Modelo de menor custo suficiente para texto curto."),
             ToRecomendado(OpenRouterTipoTarefa.CorrecaoJson, EscolherNormalizacao(modelos), "Modelo com boa aderencia a JSON para correcao simples.")
         ];
+    }
+
+    public async Task<IReadOnlyList<OpenRouterModeloConfiguracaoResponse>> ListarConfiguracoesAsync(CancellationToken cancellationToken)
+    {
+        var configuracoes = await db.OpenRouterModelosConfiguracoes.AsNoTracking().ToArrayAsync(cancellationToken);
+        var modelos = await db.OpenRouterModelos.AsNoTracking().ToDictionaryAsync(x => x.ModelId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+        return Enum.GetValues<OpenRouterTipoTarefa>()
+            .Select(tipo =>
+            {
+                var config = configuracoes.FirstOrDefault(x => x.TipoTarefa == tipo);
+                modelos.TryGetValue(config?.ModelId ?? "", out var modelo);
+                return ToConfiguracaoResponse(tipo, config, modelo);
+            })
+            .ToArray();
+    }
+
+    public async Task<OpenRouterModeloConfiguracaoResponse> ConfigurarModeloAsync(OpenRouterTipoTarefa tipoTarefa, string modelId, string? motivo, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(modelId))
+        {
+            throw new ValidacaoException("REQUISICAO_INVALIDA", "Informe o ModelId do OpenRouter.");
+        }
+
+        modelId = modelId.Trim();
+        var agora = DateTime.UtcNow;
+        var config = await db.OpenRouterModelosConfiguracoes.FirstOrDefaultAsync(x => x.TipoTarefa == tipoTarefa, cancellationToken);
+        if (config is null)
+        {
+            config = new OpenRouterModeloConfiguracao
+            {
+                TipoTarefa = tipoTarefa,
+                CriadoEm = agora
+            };
+            db.OpenRouterModelosConfiguracoes.Add(config);
+        }
+
+        config.ModelId = modelId;
+        config.TravadoManual = true;
+        config.Motivo = string.IsNullOrWhiteSpace(motivo) ? null : motivo.Trim();
+        config.AtualizadoEm = agora;
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        var modelo = await db.OpenRouterModelos.AsNoTracking().FirstOrDefaultAsync(x => x.ModelId == modelId, cancellationToken);
+        return ToConfiguracaoResponse(tipoTarefa, config, modelo);
+    }
+
+    public async Task<OpenRouterModeloConfiguracaoResponse> LimparConfiguracaoAsync(OpenRouterTipoTarefa tipoTarefa, CancellationToken cancellationToken)
+    {
+        var config = await db.OpenRouterModelosConfiguracoes.FirstOrDefaultAsync(x => x.TipoTarefa == tipoTarefa, cancellationToken);
+        if (config is not null)
+        {
+            db.OpenRouterModelosConfiguracoes.Remove(config);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        return ToConfiguracaoResponse(tipoTarefa, null, null);
     }
 
     public async Task RegistrarExecucaoAsync(OpenRouterExecucao execucao, CancellationToken cancellationToken)
@@ -310,6 +369,18 @@ public sealed class OpenRouterModelosService(
     private static OpenRouterModeloRecomendadoResponse ToRecomendado(OpenRouterTipoTarefa tipoTarefa, OpenRouterModelo? modelo, string motivo)
     {
         return new OpenRouterModeloRecomendadoResponse(tipoTarefa, modelo?.ModelId ?? "Nao configurado", modelo?.Nome, modelo?.CustoBeneficioScore ?? 0, motivo);
+    }
+
+    private static OpenRouterModeloConfiguracaoResponse ToConfiguracaoResponse(OpenRouterTipoTarefa tipoTarefa, OpenRouterModeloConfiguracao? config, OpenRouterModelo? modelo)
+    {
+        return new OpenRouterModeloConfiguracaoResponse(
+            tipoTarefa,
+            config?.ModelId,
+            modelo?.Nome,
+            config?.TravadoManual ?? false,
+            config?.TravadoManual == true ? "Manual" : "Automatico",
+            config?.Motivo,
+            config?.AtualizadoEm);
     }
 
     private static string? GetString(JsonElement element, string propertyName)

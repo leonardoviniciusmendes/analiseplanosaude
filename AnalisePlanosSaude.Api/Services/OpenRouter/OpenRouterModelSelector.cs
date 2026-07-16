@@ -15,14 +15,22 @@ public sealed class OpenRouterModelSelector(
     private readonly OpenRouterOptions _openRouterOptions = openRouterOptions.Value;
     private readonly OpenRouterModelosOptions _modelosOptions = modelosOptions.Value;
 
-    public async Task<string> SelecionarAsync(OpenRouterTipoTarefa tipoTarefa, CancellationToken cancellationToken)
+    public async Task<string> SelecionarAsync(OpenRouterTipoTarefa tipoTarefa, IReadOnlySet<string>? modelosIgnorados, CancellationToken cancellationToken)
     {
+        var ignorados = modelosIgnorados ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var configuracao = await db.OpenRouterModelosConfiguracoes.AsNoTracking().FirstOrDefaultAsync(x => x.TipoTarefa == tipoTarefa && x.TravadoManual, cancellationToken);
+        if (configuracao is not null && !ignorados.Contains(configuracao.ModelId))
+        {
+            return configuracao.ModelId;
+        }
+
         if (!_modelosOptions.SelecaoAutomatica)
         {
             return ModeloConfiguradoOuErro();
         }
 
-        var query = db.OpenRouterModelos.AsNoTracking().Where(x => x.Ativo);
+        var ignoradosArray = ignorados.ToArray();
+        var query = db.OpenRouterModelos.AsNoTracking().Where(x => x.Ativo && !ignoradosArray.Contains(x.ModelId));
 
         query = tipoTarefa switch
         {
@@ -44,7 +52,18 @@ public sealed class OpenRouterModelSelector(
         };
 
         var selecionado = await query.Select(x => x.ModelId).FirstOrDefaultAsync(cancellationToken);
-        return string.IsNullOrWhiteSpace(selecionado) ? ModeloConfiguradoOuErro() : selecionado;
+        if (!string.IsNullOrWhiteSpace(selecionado))
+        {
+            return selecionado;
+        }
+
+        var fallback = ModeloConfiguradoOuErro();
+        if (!ignorados.Contains(fallback))
+        {
+            return fallback;
+        }
+
+        throw new ValidacaoException("FALHA_OPENROUTER", "Nenhum modelo OpenRouter disponivel para fallback.");
     }
 
     private string ModeloConfiguradoOuErro()

@@ -22,6 +22,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<OpenRouterModelo> OpenRouterModelos => Set<OpenRouterModelo>();
     public DbSet<OpenRouterModeloHistorico> OpenRouterModelosHistorico => Set<OpenRouterModeloHistorico>();
     public DbSet<OpenRouterExecucao> OpenRouterExecucoes => Set<OpenRouterExecucao>();
+    public DbSet<OpenRouterModeloConfiguracao> OpenRouterModelosConfiguracoes => Set<OpenRouterModeloConfiguracao>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -326,6 +327,19 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(x => x.CriadoEm).IsRequired();
             entity.HasIndex(x => new { x.TipoTarefa, x.CriadoEm });
             entity.HasIndex(x => new { x.ModelId, x.CriadoEm });
+        });
+
+        modelBuilder.Entity<OpenRouterModeloConfiguracao>(entity =>
+        {
+            entity.ToTable("OpenRouterModelosConfiguracoes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.TipoTarefa).HasConversion<string>().HasMaxLength(60).IsRequired();
+            entity.Property(x => x.ModelId).HasMaxLength(220).IsRequired();
+            entity.Property(x => x.Motivo).HasColumnType("text");
+            entity.Property(x => x.CriadoEm).IsRequired();
+            entity.Property(x => x.AtualizadoEm).IsRequired();
+            entity.HasIndex(x => x.TipoTarefa).IsUnique();
+            entity.HasIndex(x => x.ModelId);
         });
     }
 }

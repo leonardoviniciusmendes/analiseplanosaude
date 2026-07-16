@@ -34,3 +34,12 @@ public sealed record OpenRouterModeloRecomendadoResponse(
     string? Nome,
     decimal CustoBeneficioScore,
     string Motivo);
+
+public sealed record OpenRouterModeloConfiguracaoResponse(
+    OpenRouterTipoTarefa TipoTarefa,
+    string? ModelId,
+    string? Nome,
+    bool TravadoManual,
+    string ModoSelecao,
+    string? Motivo,
+    DateTime? AtualizadoEm);

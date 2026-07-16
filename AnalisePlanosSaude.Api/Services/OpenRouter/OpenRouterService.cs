@@ -227,64 +227,81 @@ public sealed class OpenRouterService(
             throw new ValidacaoException("FALHA_OPENROUTER", "OpenRouter__ApiKey deve estar configurado.");
         }
 
-        var model = await modelSelector.SelecionarAsync(tipoTarefa, cancellationToken);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, _options.TimeoutSeconds)));
-        var stopwatch = Stopwatch.StartNew();
-        string? erro = null;
-        int? tokensInput = null;
-        int? tokensOutput = null;
+        var modelosTentados = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Exception? ultimaFalha = null;
 
-        try
+        for (var tentativa = 1; tentativa <= 2; tentativa++)
         {
-            var client = httpClientFactory.CreateClient("OpenRouter");
-            client.Timeout = Timeout.InfiniteTimeSpan;
-            client.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
-            client.DefaultRequestHeaders.Remove("HTTP-Referer");
-            client.DefaultRequestHeaders.Remove("X-Title");
-            client.DefaultRequestHeaders.Add("HTTP-Referer", _options.SiteUrl);
-            client.DefaultRequestHeaders.Add("X-Title", _options.AppName);
+            var model = await modelSelector.SelecionarAsync(tipoTarefa, modelosTentados, cancellationToken);
+            modelosTentados.Add(model);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, _options.TimeoutSeconds)));
+            var stopwatch = Stopwatch.StartNew();
+            string? erro = null;
+            int? tokensInput = null;
+            int? tokensOutput = null;
 
-            var request = new
+            try
             {
-                model,
-                temperature = 0.1,
-                response_format = new { type = "json_object" },
-                messages = new object[]
+                var client = httpClientFactory.CreateClient("OpenRouter");
+                client.Timeout = Timeout.InfiniteTimeSpan;
+                client.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+                client.DefaultRequestHeaders.Remove("HTTP-Referer");
+                client.DefaultRequestHeaders.Remove("X-Title");
+                client.DefaultRequestHeaders.Add("HTTP-Referer", _options.SiteUrl);
+                client.DefaultRequestHeaders.Add("X-Title", _options.AppName);
+
+                var request = new
                 {
-                    new { role = "system", content = systemPrompt },
-                    new { role = "user", content = userPayload }
+                    model,
+                    temperature = 0.1,
+                    response_format = new { type = "json_object" },
+                    messages = new object[]
+                    {
+                        new { role = "system", content = systemPrompt },
+                        new { role = "user", content = userPayload }
+                    }
+                };
+
+                using var response = await client.PostAsync("chat/completions", new StringContent(JsonSerializer.Serialize(request, JsonOptions), Encoding.UTF8, "application/json"), timeout.Token);
+                var content = await response.Content.ReadAsStringAsync(timeout.Token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    erro = content;
+                    throw new ValidacaoException("FALHA_OPENROUTER", "Falha ao chamar OpenRouter.", [content]);
                 }
-            };
 
-            using var response = await client.PostAsync("chat/completions", new StringContent(JsonSerializer.Serialize(request, JsonOptions), Encoding.UTF8, "application/json"), timeout.Token);
-            var content = await response.Content.ReadAsStringAsync(timeout.Token);
-            if (!response.IsSuccessStatusCode)
-            {
-                erro = content;
-                throw new ValidacaoException("FALHA_OPENROUTER", "Falha ao chamar OpenRouter.", [content]);
+                using var doc = JsonDocument.Parse(content);
+                if (doc.RootElement.TryGetProperty("usage", out var usage))
+                {
+                    tokensInput = GetInt(usage, "prompt_tokens");
+                    tokensOutput = GetInt(usage, "completion_tokens");
+                }
+
+                var message = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+                var result = ExtractJson(message);
+                stopwatch.Stop();
+                await RegistrarExecucaoAsync(tipoTarefa, model, tokensInput, tokensOutput, stopwatch.ElapsedMilliseconds, true, null, cancellationToken);
+                return result;
             }
-
-            using var doc = JsonDocument.Parse(content);
-            if (doc.RootElement.TryGetProperty("usage", out var usage))
+            catch (OperationCanceledException)
             {
-                tokensInput = GetInt(usage, "prompt_tokens");
-                tokensOutput = GetInt(usage, "completion_tokens");
+                throw;
             }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                ultimaFalha = ex;
+                await RegistrarExecucaoAsync(tipoTarefa, model, tokensInput, tokensOutput, stopwatch.ElapsedMilliseconds, false, erro ?? ex.Message, CancellationToken.None);
+                if (tentativa == 2)
+                {
+                    break;
+                }
+            }
+        }
 
-            var message = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
-            var result = ExtractJson(message);
-            stopwatch.Stop();
-            await RegistrarExecucaoAsync(tipoTarefa, model, tokensInput, tokensOutput, stopwatch.ElapsedMilliseconds, true, null, cancellationToken);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            stopwatch.Stop();
-            await RegistrarExecucaoAsync(tipoTarefa, model, tokensInput, tokensOutput, stopwatch.ElapsedMilliseconds, false, erro ?? ex.Message, CancellationToken.None);
-            throw;
-        }
+        throw ultimaFalha ?? new ValidacaoException("FALHA_OPENROUTER", "Falha ao chamar OpenRouter.");
     }
 
     private async Task RegistrarExecucaoAsync(OpenRouterTipoTarefa tipoTarefa, string model, int? tokensInput, int? tokensOutput, long tempoMs, bool sucesso, string? erro, CancellationToken cancellationToken)
